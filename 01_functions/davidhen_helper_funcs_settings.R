@@ -18,5 +18,4 @@ theme_set(theme_minimal(base_family = "Roboto", base_size = 20) +
                   plot.margin = margin(3,15,3,3,"mm")))
 
 #global options for scientific numbers and significant digits.          
-options(scipen = 10,
-        digits = 3)
+options(scipen = 10)

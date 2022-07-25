@@ -39,73 +39,340 @@ R packages and required helper functions.
 
 ```{r, warning=FALSE, message=FALSE}
 suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(magrittr))
 suppressPackageStartupMessages(library(here))
 suppressPackageStartupMessages(library(readxl))
 suppressPackageStartupMessages(library(janitor))
 suppressPackageStartupMessages(library(lubridate))
+suppressPackageStartupMessages(library(socviz))
 
 source(here("01_functions/davidhen_helper_funcs_settings.R"))
 
 ```
 
 
-# Load Data
-
-## Post-2016 TQA data 
-
-There is a combined 2016-2019 achievement file for TQA
-
-```{r}
-tqa <- read_excel(here("03_data/TQA/IR2019-00546 TQA Achievement2016-2019.xlsx"), 
-                  sheet = "Data") |>
-  clean_names()
-```
-
-## Pre 2016 QOF data
-
-## SIMD and UR data
-
-
-# Clean Data
+# Load and Clean Data
 
 ## Post-2016 TQA data
 
-```{r}
-tqa |> 
-  separate(year, c("fin_year", "meh"), sep = " ") |> 
-  select(-meh, -ends_with("_perc")) |> 
-  mutate(across(is.character, .fns = str_trim)) -> tqa
+### Indicators
 
-tqa |>
-  select(-ends_with("_den")) |> 
+There is a combined 2016-2019 achievement file for TQA, however it is in a wide format.
+
+```{r}
+# Load in the file and tidy variable names
+tqa_ind <- read_excel(here("03_data/TQA/IR2019-00546 TQA Achievement2016-2019.xlsx"), 
+                  sheet = "Data") %>%
+  clean_names()
+
+# Split the year variable to lose the unneeded text
+# Drop the percentage variables (recalculated later)
+# Ensure there is not leading or trailing white space in character variables
+tqa_ind %>% 
+  separate(year, c("fin_year", "meh"), sep = " ") %>% 
+  select(-meh, -ends_with("_perc")) %>% 
+  mutate(across(is.character, .fns = str_trim)) -> tqa_ind
+
+# Drop the denominator variables, reshape the numerator variables and values
+tqa_ind %>%
+  select(-ends_with("_den")) %>% 
   pivot_longer(ends_with("_num"), names_to = "indicator", 
-               values_to = "ind_num") |> 
+               values_to = "ind_num") %>% 
   mutate(indicator = str_remove(indicator, "_num")) -> tqa_num
 
-
-tqa |>
-  select(-ends_with("_num")) |> 
+# Repeat for the denominators
+tqa_ind %>%
+  select(-ends_with("_num")) %>% 
   pivot_longer(ends_with("_den"), names_to = "indicator", 
-               values_to = "ind_den") |> 
+               values_to = "ind_den") %>% 
   mutate(indicator = str_remove(indicator, "_den")) -> tqa_den
 
-left_join(tqa_num, tqa_den) |> 
-  mutate(ind_perc = ind_num/ind_den * 100) |> 
-  arrange(practice, indicator, fin_year) -> tqa
+# join the two together, recalculate % arrange for an easier quick look
+left_join(tqa_num, tqa_den) %>% 
+  mutate(ind_perc = ind_num/ind_den * 100) %>% 
+  round_df(dig = 1) %>% 
+  arrange(practice, indicator, fin_year) -> tqa_ind
 
+# remove interim objects
 rm(list = c("tqa_num", "tqa_den"))
 
-tqa
+# Print out the result
+tqa_ind
 ```
 
 
 
 ```{r}
-unique(tqa$indicator)
+unique(tqa_ind$indicator)
+```
+
+25 indicators in the the most recent TQA data. Will keep all that are consistent going back in time.
+
+
+### Registers
+
+Two files for registers in the TQA data
+
+```{r}
+# Import 2016-2018 data
+reg_1618 <- read_excel(here("03_data/TQA/IR2018-01954 TQA 2016-2018 Prevalence.xlsx"),
+                       sheet = "Data") %>% 
+  clean_names() %>% 
+  # Tidy variables up and drop prevalence (recalculate later)
+  separate(year, c("fin_year", "meh"), sep = " ") %>% 
+  select(-meh, -ends_with("prev")) %>% 
+  mutate(across(is.character, .fns = str_trim)) %>% 
+  # Reshape register values to long format
+  pivot_longer(ends_with("reg"), names_to = "disease", 
+               values_to = "registered") %>% 
+  mutate(disease = str_remove(disease, "reg")) %>%
+  # recalculate prevalence - note as a % - same as original .xlsx
+  mutate(prev = registered/population * 100) %>% 
+  round_df(dig = 1) -> reg_1618
+
+# Repeat for 2018/19 data
+reg_1819 <- read_excel(here("03_data/TQA/IR2019-00546 TQA 2018-2019 Prevalence.xlsx"),
+                       sheet = "Data") %>% 
+  clean_names() %>% 
+  separate(year, c("fin_year", "meh"), sep = " ") %>% 
+  select(-meh, -ends_with("prev")) %>% 
+  mutate(across(is.character, .fns = str_trim)) %>% 
+  pivot_longer(ends_with("reg"), names_to = "disease", 
+               values_to = "registered") %>% 
+  mutate(disease = str_remove(disease, "reg")) %>% 
+  mutate(prev = registered/population * 100) %>% 
+  round_df(dig = 1) -> reg_1819
+
+# Join them together
+bind_rows(reg_1618, reg_1819) %>% 
+  arrange(practice, fin_year) -> tqa_reg
+
+#remove interim objects
+
+rm(list = c("reg_1618", "reg_1819"))
+
+# Print table
+tqa_reg
 ```
 
 
-## Pre-2016 QOF data
+## Pre-2016 QOF data‚
+
+### Practice populations
+
+Practice populations are annoyingly kept in a different file from the indicators and registers. Will import and tidy up here so we have a table that can be joined later on.
+
+```{r}
+# Import the 2015/16 lookup file for practice list size
+pop_1516 <- 
+  read_excel(here("03_data/QOF_2015_16/QOF_Scot_201516_Practice_lookup.xls"),
+             sheet = "Practices_in_QOF_201516") %>% 
+  clean_names %>% 
+  select(practice = practice_code, population = list_size) %>% 
+  mutate(practice = as.character(practice), 
+         population = as.double(population),
+         fin_year = "2015-16")
+
+pop_1415 <- 
+  read_excel(here("03_data/QOF_2014_15/Individual level 2014-5/QOF_Scot_201415_Practice_lookup.xls"),
+             sheet = "Practices_in_QOF_201415") %>% 
+  clean_names %>% 
+  select(practice = practice_code, population = list_size) %>% 
+  mutate(practice = as.character(practice), 
+         population = as.double(population),
+         fin_year = "2014-15")
+
+pop_1314 <- 
+  read_excel(here("03_data/QOF_2013_14/Individual level 2013-14/QOF_Scot_201314_Practice_lookup.xls"),
+             sheet = "Practices_in_QOF_201314") %>% 
+  clean_names %>% 
+  select(practice = practice_code, population = list_size) %>% 
+  mutate(practice = as.character(practice), 
+         population = as.double(population), 
+         fin_year = "2013-14")
+
+pop_1213 <- 
+  read_excel(here("03_data/QOF_2012_13/Individual level 2012-13/QOF_Scot_201213_Practice_lookup.xls"),
+             sheet = "Practices_in_QOF_201213") %>% 
+  clean_names %>% 
+  select(practice = practice_code, population = list_size) %>% 
+  mutate(practice = as.character(practice), 
+         population = as.double(population), 
+         fin_year = "2012-13")
+
+pop_1112 <- 
+  read_excel(here("03_data/QOF_2011_12/Individual level 2011-12/QOF_Scot_201112_Practice_lookup.xls"),
+             sheet = "Practices_in_QOF_201112") %>% 
+  clean_names %>% 
+  select(practice = practice_code, population = list_size) %>% 
+  mutate(practice = as.character(practice), 
+         population = as.double(population), 
+         fin_year = "2011-12")
+
+pop_1011 <- 
+  read_excel(here("03_data/QOF_2009_10/Individual level 2009-10/QOF_Scot_201011_Practice_lookup.xls"),
+             sheet = "Practices_in_QOF_201011") %>% 
+  clean_names %>% 
+  select(practice = practice_code, population = list_size) %>% 
+  mutate(practice = as.character(practice), 
+         population = as.double(population),
+         fin_year = "2010-11")
+
+pop_table <- bind_rows(pop_1516, pop_1415, pop_1314, pop_1213, pop_1112,
+                       pop_1011) %>% 
+  arrange(practice, fin_year) %>% 
+  select(fin_year, everything())
+
+# remove interim objects
+rm(list = c("pop_1516", "pop_1415", "pop_1314", "pop_1213",
+            "pop_1112", "pop_1011"))
+
+pop_table
+```
+
+
+### AF
+
+#### Indicator
+
+The AF indicator in TQA is "af007". 
+
+> In those patients with atrial fibrillation with a record of a CHA2DS2-VASc score of 2 or more, the percentage of patients who are currently treated with anti-coagulation drug therapy.
+
+There are slight variations on the name in some years e.g. "AF007(S)" or "AF04" which isn't too big of a problem. However, there is a little discrepancy before 2011/12 where "AF03" included anti-platelet therapy as well as anti-coagulation therapy. Too big of change? Bruce and Dan to answer. 
+
+```{r}
+# Import AF file for 2015/16, tidy and rename for consistency with TQA data, 
+# Add a variable indicating the financial year
+# Join with list size table created above
+#af_1516 <-
+  read_excel(here("03_data/QOF_2015_16/QOF_Scot_201516_indiv_af.xls"),
+                      sheet = "Data Table") %>% 
+  clean_names() %>% 
+  filter(ind == "AF007(S)") %>% 
+  select(practice, indicator = ind, ind_num = num, ind_den = denom) %>% 
+  mutate(fin_year = "2015-16", indicator = "af007", 
+         practice = as.character(practice),
+         across(ind_num:ind_den, as.double), ind_perc = ind_num/ind_den * 100) %>% 
+  round_df(dig = 1) %>% 
+  left_join(., pop_table)
+
+# Repeat for 2014/15 indicator "AF004"
+af_1415 <-
+  read_excel(here("03_data/QOF_2014_15/Individual level 2014-5/QOF_Scot_201415_indiv_af.xls"),
+                      sheet = "Data Table") %>% 
+  clean_names() %>% 
+  filter(ind == "AF004") %>% 
+  select(practice, indicator = ind, ind_num = num, ind_den = denom) %>% 
+  mutate(fin_year = "2014-15", indicator = "af007", 
+         practice = as.character(practice),
+         across(ind_num:ind_den, as.double), ind_perc = ind_num/ind_den * 100) %>% 
+  round_df(dig = 1) %>% 
+  left_join(., pop_table)
+
+# Repeat for 2013/14 indicator "AF004"
+af_1314 <-
+  read_excel(here("03_data/QOF_2013_14/Individual level 2013-14/QOF_Scot_201314_indiv_af.xls"),
+           sheet = "Data Table") %>% 
+  clean_names() %>% 
+  filter(ind == "AF004") %>% 
+  select(practice, indicator = ind, ind_num = num, ind_den = denom) %>% 
+  mutate(fin_year = "2013-14", indicator = "af007", 
+         practice = as.character(practice),
+         across(ind_num:ind_den, as.double), ind_perc = ind_num/ind_den * 100) %>% 
+  round_df(dig = 1) %>% 
+  left_join(., pop_table)
+
+# Repeat for 2012/13 indicator "AF07"
+af_1213 <- 
+  read_excel(here("03_data/QOF_2012_13/Individual level 2012-13/QOF_Scot_201213_indiv_af.xls"),
+           sheet = "Atrial Fibrillation") %>% 
+  clean_names() %>% 
+  filter(ind == "AF07") %>% 
+  select(practice, indicator = ind, ind_num = num, ind_den = denom) %>% 
+  mutate(fin_year = "2012-13", indicator = "af007", 
+         practice = as.character(practice),
+         across(ind_num:ind_den, as.double), ind_perc = ind_num/ind_den * 100) %>% 
+  round_df(dig = 1) %>% 
+  left_join(., pop_table)
+
+# Repeat for 2011/12 indicator "AF03"
+# **Note change in definition here - includes anti-platelets**
+af_1112 <-
+  read_excel(here("03_data/QOF_2011_12/Individual level 2011-12/QOF_Scot_201112_indiv_af.xls"),
+           sheet = "Atrial Fibrillation") %>%
+  clean_names() %>% 
+  filter(ind == "AF03") %>% 
+  select(practice, indicator = ind, ind_num = num, ind_den = denom) %>% 
+  mutate(fin_year = "2011-12", indicator = "af007", 
+         practice = as.character(practice),
+         across(ind_num:ind_den, as.double), ind_perc = ind_num/ind_den * 100) %>% 
+  round_df(dig = 1) %>% 
+  left_join(., pop_table)
+
+# Repeat for 2010/11 indicator "AF03"
+# **Note change in definition here - includes anti-platelets**
+# **Note folder structure says 2009/10 but actual files are for 2010/11**
+
+af_1011 <-
+  read_excel(here("03_data/QOF_2009_10/Individual level 2009-10/QOF_Scot_201011_indiv_af.xls"),
+           sheet = "Atrial Fibrillation") %>% 
+  clean_names() %>% 
+  filter(ind == "AF03") %>% 
+  select(practice, indicator = ind, ind_num = num, ind_den = denom) %>% 
+  mutate(fin_year = "2010-11", indicator = "af007", 
+         practice = as.character(practice),
+         across(ind_num:ind_den, as.double), ind_perc = ind_num/ind_den * 100) %>% 
+  round_df(dig = 1) %>% 
+  left_join(., pop_table)
+```
+
+Now combine all 
+
+```{r}
+# Combine all AF data together
+af_tab <- 
+  full_join(tqa_ind, af_1516) %>% 
+  full_join(af_1415) %>% 
+  full_join(af_1314) %>% 
+  full_join(af_1213) %>% 
+  full_join(af_1112) %>% 
+  full_join(af_1011) %>% 
+  arrange(indicator, practice, fin_year) %>% 
+  group_by(practice) %>% 
+  fill(name, .direction = "up") %>% 
+  fill(board, .direction = "up") %>% 
+  ungroup
+
+af_tab
+```
+
+
+
+#### Registers
+
+Think about how to do this - register info already inputted then dropped - work around that.....
+
+### BP
+
+### CHD
+
+### CKD
+
+### DM
+
+### HF
+
+### HYP
+
+### MH
+
+### PAD
+
+###STIA
+
+## Combine
+
 
 ## SIMD and UR data
 
