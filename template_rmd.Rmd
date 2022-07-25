@@ -1,0 +1,27 @@
+---
+title: ""
+author: "David Henderson"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+---
+
+```{r setup, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.width = 12, fig.height = 9,
+                      warning = FALSE, message = FALSE,
+                      class.source="bg-success")
+```
+
+
+# Introduction
+
+
+## Software
+
+R packages and required helper functions.
+
+```{r, warning=FALSE, message=FALSE}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(here))
+
+source(here("01_functions/davidhen_helper_funcs_settings.R"))
+```
